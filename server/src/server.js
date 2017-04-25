@@ -331,6 +331,103 @@ function sendDatabaseError(res, err) {
 res.status(500).send("A database error occurred: " + err);
 }
 
+app.post('/feeditem/:feeditemid/comments', function(req, res) {
+  var body = req.body;
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  var feedid = new ObjectID(req.params.feeditemid);
+  // Check if requester is authorized to post this status update.
+  // (The requester must be the author of the update.)
+  if (fromUser === body.author) {
+    postComment(new ObjectID(fromUser), feedid, body.contents, function(err){
+      if (err) {
+        // A database error happened.
+        // 500: Internal error.
+        res.status(500).send("A database error occurred: " + err);
+      } else {
+        // When POST creates a new resource, we should tell the client about it
+        // in the 'Location' header and use status code 201.
+        res.status(201);
+        res.set('Location', '/feeditem/' + feedid + '/comments/' + 2);
+        getFeedItem(feedid, function(err, feedItem) {
+          if (err) {
+            return sendDatabaseError(res, err);
+          }
+          res.send(feedItem);
+        });
+      }
+    });
+  } else {
+    // 401: Unauthorized.
+    res.status(401).end();
+  }
+});
+
+function postComment(author, feedid, contents, callback){
+  var time = new Date().getTime();
+  // The new status update. The database will assign the ID for us.
+  var newComment = {
+    "author": author,
+    "contents": contents,
+    "postDate": time,
+    "likeCounter": []
+  };
+
+
+  var feedItems = db.collection('feedItems');
+  feedItems.updateOne({_id: feedid},
+  {
+    $push: {
+      comments: newComment
+    }
+  }, function(err) {
+    if (err) {
+      return callback(err);
+    }
+    callback(null)
+  });
+  //feedItem.comments.push(newComment);
+  //writeDocument('feedItems', feedItem);
+
+  // Add the status update to the database.
+  // Returns the status update w/ an ID assigned.
+
+  // Return the newly-posted object.
+  //return getFeedItemSync(feedid);
+
+}
+
+app.put('/feeditem/:feeditemid/comments/:commentidx/likelist/:userid', function(req, res) {
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  var commentIdx = req.params.commentidx;
+  var feedItemId = new ObjectID(req.params.feeditemid);
+  var userId = req.params.userid;
+  if (fromUser === userId) {
+    getFeedItem(feedItemId, function(err, feeditem){
+      var comment = feeditem.comments[commentIdx]
+      var commenttext = comment.contents;
+      console.log(commenttext)
+      db.collection('feedItems').update(
+        { _id: feedItemId,  "comments.contents": commenttext},
+        {
+          $addToSet: {
+            "comments.$.likeCounter": new ObjectID(userId)
+          }
+        },
+        function(err){
+          if(err){
+            return sendDatabaseError(res, err)
+          }
+          if(comment.likeCounter.indexOf(new ObjectID(userId)) === -1){
+            comment.likeCounter.push(new ObjectID(userId))
+          }
+          res.send(comment);
+        }
+      );
+    });
+
+  }
+});
+
 // `PUT /feeditem/feedItemId/likelist/userId` content
 app.put('/feeditem/:feeditemid/likelist/:userid', function(req, res) {
 var fromUser = getUserIdFromToken(req.get('Authorization'));
@@ -369,6 +466,35 @@ if (fromUser === userId) {
   // 401: Unauthorized.
   res.status(401).end();
 }
+});
+
+app.delete('/feeditem/:feeditemid/comments/:commentidx/likelist/:userid', function(req, res) {
+  var fromUser = getUserIdFromToken(req.get('Authorization'));
+  var commentIdx = req.params.commentidx;
+  var feedItemId = new ObjectID(req.params.feeditemid);
+  var userId = req.params.userid;
+  if (fromUser === userId) {
+    getFeedItem(feedItemId, function(err, feeditem){
+      var comment = feeditem.comments[commentIdx]
+      var commenttext = comment.contents;
+      db.collection('feedItems').update(
+        { _id: feedItemId,  "comments.contents": commenttext},
+        {
+          $pull: {
+            "comments.$.likeCounter": new ObjectID(userId)
+          }
+        },
+        function(err){
+          if(err){
+            return sendDatabaseError(res, err)
+          }
+          comment.likeCounter.splice(comment.likeCounter.indexOf(new ObjectID(userId)), 1)
+          res.send(comment);
+        }
+      );
+    });
+
+  }
 });
 
 // Unlike a feed item.
